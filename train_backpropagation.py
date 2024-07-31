@@ -1,192 +1,297 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-# Function to load and normalize dataset
-def load_and_normalize_dataset(file_path):
-    dataset = np.loadtxt(file_path)
-    features = dataset[:, :-1]
-    targets = dataset[:, -1].reshape(-1, 1)
+class NeuralNet:
+    def __init__(self, layer_dims, lr=0.01, max_epochs=10000, tolerance=0.001, momentum=0.9, mode='1'):
+        self.layer_dims = layer_dims
+        self.lr = lr
+        self.max_epochs = max_epochs
+        self.tolerance = tolerance
+        self.momentum = momentum
+        self.params = self.init_params()
+        self.velocities = self.init_velocities()
+        self.loss_history = []
+        self.mode = mode
+        self.accuracy = None
     
-    mean = np.mean(features, axis=0)
-    std_dev = np.std(features, axis=0)
-    normalized_features = (features - mean) / std_dev
-    
-    return normalized_features, targets, mean, std_dev
+    def sigmoid(self, z):
+        return 1 / (1 + np.exp(-z))
 
-# Function to initialize network parameters
-def initialize_network_params(input_size, hidden_sizes, output_size):
-    params = {}
-    layer_sizes = [input_size] + hidden_sizes + [output_size]
-    
-    for i in range(1, len(layer_sizes)):
-        params[f"W{i}"] = np.random.randn(layer_sizes[i-1], layer_sizes[i]) * 0.01
-        params[f"b{i}"] = np.zeros((1, layer_sizes[i]))
-    
-    return params
+    def sigmoid_grad(self, a):
+        return a * (1 - a)
 
-# Function to initialize momentum terms
-def initialize_momentum_terms(params):
-    momentum_terms = {}
-    total_layers = len(params) // 2
-    for i in range(1, total_layers + 1):
-        momentum_terms[f"dW{i}"] = np.zeros_like(params[f"W{i}"])
-        momentum_terms[f"db{i}"] = np.zeros_like(params[f"b{i}"])
-    return momentum_terms
+    def identity(self, z):
+        return z
 
-# Sigmoid activation function
-def sigmoid_activation(Z):
-    return 1 / (1 + np.exp(-Z))
+    def identity_grad(self, a):
+        return np.ones_like(a)
+    
+    def init_params(self):
+        parameters = []
+        for i in range(len(self.layer_dims) - 1):
+            W = np.random.randn(self.layer_dims[i], self.layer_dims[i + 1])
+            b = np.zeros((1, self.layer_dims[i + 1]))
+            parameters.append((W, b))
+        return parameters
 
-# Forward pass through the network
-def forward_pass(X, params, hidden_sizes):
-    cache = {}
-    A = X
-    total_layers = len(hidden_sizes) + 1
-    
-    for i in range(1, total_layers):
-        Z = np.dot(A, params[f"W{i}"]) + params[f"b{i}"]
-        A = sigmoid_activation(Z)
-        cache[f"Z{i}"] = Z
-        cache[f"A{i}"] = A
-    
-    Z_final = np.dot(A, params[f"W{total_layers}"]) + params[f"b{total_layers}"]
-    A_final = Z_final
-    cache[f"Z{total_layers}"] = Z_final
-    cache[f"A{total_layers}"] = A_final
-    
-    return A_final, cache
+    def init_velocities(self):
+        velocities = []
+        for i in range(len(self.layer_dims) - 1):
+            vW = np.zeros((self.layer_dims[i], self.layer_dims[i + 1]))
+            vb = np.zeros((1, self.layer_dims[i + 1])) 
+            velocities.append((vW, vb))
+        return velocities
 
-# Mean squared error loss
-def compute_mse_loss(Y_true, Y_pred):
-    return np.mean((Y_true - Y_pred) ** 2)
+    def forward(self, X):
+        A = X
+        cache = []
+        for i in range(len(self.params) - 1):
+            W, b = self.params[i]
+            Z = np.dot(A, W) + b
+            A = self.sigmoid(Z)
+            cache.append((A, Z))
+        W, b = self.params[-1]
+        Z = np.dot(A, W) + b
+        A = self.sigmoid(Z)
+        cache.append((A, Z))
+        return cache
 
-# Calculate percentage error
-def compute_percentage_error(Y_true, Y_pred):
-    return np.mean(np.abs((Y_true - Y_pred) / Y_true)) * 100
-
-# Derivative of sigmoid function
-def sigmoid_derivative(Z):
-    s = sigmoid_activation(Z)
-    return s * (1 - s)
-
-# Backward pass to compute gradients
-def backward_pass(X, Y, params, cache, hidden_sizes):
-    gradients = {}
-    m = X.shape[0]
-    total_layers = len(hidden_sizes) + 1
-    
-    dZ_final = 2 * (cache[f"A{total_layers}"] - Y)
-    gradients[f"dW{total_layers}"] = np.dot(cache[f"A{total_layers-1}"].T, dZ_final) / m
-    gradients[f"db{total_layers}"] = np.sum(dZ_final, axis=0, keepdims=True) / m
-    
-    for i in reversed(range(1, total_layers)):
-        dA_prev = np.dot(dZ_final, params[f"W{i+1}"].T)
-        dZ = dA_prev * sigmoid_derivative(cache[f"Z{i}"])
-        gradients[f"dW{i}"] = np.dot(X.T, dZ) / m if i == 1 else np.dot(cache[f"A{i-1}"].T, dZ) / m
-        gradients[f"db{i}"] = np.sum(dZ, axis=0, keepdims=True) / m
-        dZ_final = dZ
-    
-    return gradients
-
-# Update network parameters using momentum
-def update_params_with_momentum(params, gradients, momentum_terms, learning_rate, momentum):
-    total_layers = len(params) // 2
-    
-    for i in range(1, total_layers + 1):
-        momentum_terms[f"dW{i}"] = momentum * momentum_terms[f"dW{i}"] + (1 - momentum) * gradients[f"dW{i}"]
-        momentum_terms[f"db{i}"] = momentum * momentum_terms[f"db{i}"] + (1 - momentum) * gradients[f"db{i}"]
+    def backward(self, X, Y, cache):
+        m = Y.shape[0]
+        grads = []
+        A, Z = cache[-1]
+        dZ = A - Y
+        dW = (1/m) * np.dot(cache[-2][0].T, dZ) if len(cache) > 1 else (1/m) * np.dot(X.T, dZ)
+        db = (1/m) * np.sum(dZ, axis=0)
+        grads.append((dW, db))
         
-        params[f"W{i}"] -= learning_rate * momentum_terms[f"dW{i}"]
-        params[f"b{i}"] -= learning_rate * momentum_terms[f"db{i}"]
-    
-    return params, momentum_terms
-
-# Training the neural network
-def train_neural_network(X, Y, hidden_sizes, epochs, learning_rate, momentum):
-    input_size = X.shape[1]
-    output_size = Y.shape[1]
-    params = initialize_network_params(input_size, hidden_sizes, output_size)
-    momentum_terms = initialize_momentum_terms(params)
-    
-    loss_history = []
-    percent_error_history = []
-    
-    for epoch in range(epochs):
-        Y_pred, cache = forward_pass(X, params, hidden_sizes)
-        loss = compute_mse_loss(Y, Y_pred)
-        percent_error = compute_percentage_error(Y, Y_pred)
-        gradients = backward_pass(X, Y, params, cache, hidden_sizes)
-        params, momentum_terms = update_params_with_momentum(params, gradients, momentum_terms, learning_rate, momentum)
+        for i in range(len(cache) - 2, -1, -1):
+            A, Z = cache[i]
+            dA = np.dot(dZ, self.params[i + 1][0].T)
+            dZ = dA * self.sigmoid_grad(A)
+            dW = (1/m) * np.dot(cache[i - 1][0].T, dZ) if i > 0 else (1/m) * np.dot(X.T, dZ)
+            db = (1/m) * np.sum(dZ, axis=0)
+            grads.append((dW, db))
         
-        loss_history.append(loss)
-        percent_error_history.append(percent_error)
+        grads.reverse()
         
-        if epoch % 100 == 0:
-            print(f"Epoch {epoch}, MSE Loss: {loss:.4f}, Percent Error: {percent_error:.2f}%")
+        for i in range(len(self.params)):
+            W, b = self.params[i]
+            dW, db = grads[i]
+            vW, vb = self.velocities[i]
+            
+            vW = self.momentum * vW + (1 - self.momentum) * dW
+            vb = self.momentum * vb + (1 - self.momentum) * db
+
+            W -= self.lr * vW
+            b -= self.lr * vb
+
+            self.params[i] = (W, b)
+            self.velocities[i] = (vW, vb)
+
+    def normalize_data(self, X, Y):
+        epsilon = 1e-8
+        X_normalized = (X - np.min(X)) / (np.max(X) - np.min(X) + epsilon)
+        Y_normalized = (Y - np.min(Y)) / (np.max(Y) - np.min(Y) + epsilon)
+        return X_normalized, Y_normalized
+
+    def fit(self, X, Y):
+        if self.mode == '1':
+            X, Y = self.normalize_data(X, Y)
+
+        for epoch in range(self.max_epochs):
+            cache = self.forward(X)
+            self.backward(X, Y, cache)
+            
+            mse_loss = np.mean((Y - cache[-1][0]) ** 2)
+            print(f'Epoch {epoch}, Loss: {mse_loss}')
+
+            if mse_loss <= 100:
+                self.loss_history.append(mse_loss)
+
+            if mse_loss <= self.tolerance:
+                break
+
+    def evaluate(self, X_test, Y_test):
+        if self.mode == '1':
+            X_test_norm, Y_test_norm = self.normalize_data(X_test, Y_test)
+            preds = self.predict(X_test_norm)
+            return Y_test_norm, preds
+        elif self.mode == '2':
+            preds = self.predict(X_test)
+            preds = np.round(preds)
+            return Y_test, preds
+            
+    def predict(self, X):
+        Y_dummy = 0
+        X_norm, Y_dummy = self.normalize_data(X, Y_dummy)
+        cache = self.forward(X_norm)
+        return cache[-1][0]
     
-    return params, loss_history, percent_error_history
+    def plot_confusion_matrix(self, all_targets, all_preds):
+        if self.mode == '2':
+            combined_matrix = np.zeros((2, 2), dtype=int)
+            
+            for target, pred in zip(all_targets, all_preds):
+                y_true = np.argmax(target, axis=1)
+                y_pred = np.argmax(pred, axis=1)
+                confusion = np.zeros((2, 2), dtype=int)
+                for true, predicted in zip(y_true, y_pred):
+                    confusion[true, predicted] += 1
+                combined_matrix += confusion
+            
+            TP = combined_matrix[0, 0]
+            FP = combined_matrix[0, 1]
+            FN = combined_matrix[1, 0]
+            TN = combined_matrix[1, 1]
+            accuracy = (TP + TN) / (TP + TN + FP + FN)
+            self.accuracy = accuracy * 100
 
-# Load and normalize the dataset
-file_path = 'dataset.txt'
-X, Y, mean, std_dev = load_and_normalize_dataset(file_path)
+            fig, ax = plt.subplots()
+            cax = ax.matshow(combined_matrix, cmap=plt.cm.Blues)
+            plt.colorbar(cax)
 
-# Split dataset into training and testing sets
-train_size = int(0.8 * len(X))
-X_train, X_test = X[:train_size], X[train_size:]
-Y_train, Y_test = Y[:train_size], Y[train_size:]
+            for (i, j), val in np.ndenumerate(combined_matrix):
+                plt.text(j, i, val, ha='center', va='center', color='red')
 
-# Train the neural network
-hidden_sizes = [10, 5]
-epochs = 15000
-learning_rate = 0.0001
-momentum = 0.9
-params, loss_history, percent_error_history = train_neural_network(X_train, Y_train, hidden_sizes, epochs, learning_rate, momentum)
+            plt.xlabel('Predicted')
+            plt.ylabel('True')
+            plt.title('Confusion Matrix')
 
-# Make predictions on training and testing sets
-Y_train_pred, _ = forward_pass(X_train, params, hidden_sizes)
-Y_test_pred, _ = forward_pass(X_test, params, hidden_sizes)
+            plt.xticks([0, 1], ['[1,0]', '[0,1]'])
+            plt.yticks([0, 1], ['[1,0]', '[0,1]'])
 
-# Print prediction results
-print("Training Predictions:")
-print(Y_train_pred[:10])  # Print first 10 predictions for brevity
-print("Testing Predictions:")
-print(Y_test_pred[:10])   # Print first 10 predictions for brevity
+def load_dataset(filepath):
+    with open(filepath, 'r') as file:
+        lines = file.readlines()
 
-# Save predictions to files
-np.savetxt('train_predictions.txt', Y_train_pred)
-np.savetxt('test_predictions.txt', Y_test_pred)
+    data_lines = lines[2:]
+    data = []
 
-# Plot the results
-plt.figure(figsize=(12, 6))
-plt.subplot(2, 2, 1)
-plt.plot(range(len(Y_train)), Y_train, label='Actual (Train)', alpha=0.6)
-plt.plot(range(len(Y_train)), Y_train_pred, label='Predicted (Train)', alpha=0.7)
-plt.title('Training Data')
-plt.xlabel('Sample Index')
-plt.ylabel('Value')
-plt.legend()
+    for line in data_lines:
+        data.append([int(value) for value in line.split()])
 
-plt.subplot(2, 2, 2)
-plt.plot(range(len(Y_test)), Y_test, label='Actual (Test)', alpha=0.6)
-plt.plot(range(len(Y_test)), Y_test_pred, label='Predicted (Test)', alpha=0.7)
-plt.title('Testing Data')
-plt.xlabel('Sample Index')
-plt.ylabel('Value')
-plt.legend()
+    return np.array(data)
 
-plt.subplot(2, 2, 3)
-plt.plot(range(epochs), loss_history, label='MSE Loss', alpha=0.7)
-plt.title('Training Loss')
-plt.xlabel('Epoch')
-plt.ylabel('Loss')
-plt.legend()
+def load_cross_data(filepath):
+    with open(filepath, 'r') as file:
+        lines = file.readlines()
 
-plt.subplot(2, 2, 4)
-plt.plot(range(epochs), percent_error_history, label='Percent Error', alpha=0.7)
-plt.title('Training Percent Error')
-plt.xlabel('Epoch')
-plt.ylabel('Percent Error')
-plt.legend()
+    data = []
+    current_in = []
+    current_out = []
+    for line in lines:
+        line = line.strip()
+        if line.startswith('p'):
+            if current_in and current_out:
+                combined = current_in + current_out
+                data.append(combined)
+                current_in = []
+                current_out = []
+        else:
+            if not current_in:
+                current_in = [float(num) for num in line.split()]
+            else:
+                current_out = [int(num) for num in line.split()]
 
-plt.tight_layout()
-plt.show()
+    if current_in and current_out:
+        combined = current_in + current_out
+        data.append(combined)
+    
+    return data
+
+def shuffle_split(data):
+    np.random.shuffle(data)
+    X = np.array(data[2:, :-1])
+    y = np.array(data[2:, -1])
+    Y = [[i] for i in y]
+    return X, np.array(Y)
+
+def shuffle_split_cross(c_data):
+    c_data = np.array(c_data)
+    np.random.shuffle(c_data)
+    Xc = np.array(c_data[:, :int(len(c_data[0]) / 2)])
+    Yc = np.array(c_data[:, -int(len(c_data[0]) / 2):])
+    return Xc, Yc
+
+def k_fold_split(X, Y, k, fold):
+    X_split = np.array_split(X, k)
+    Y_split = np.array_split(Y, k)
+    X_test = X_split[fold]
+    Y_test = Y_split[fold]
+    X_train = np.concatenate([X_split[j] for j in range(k) if j != fold])
+    Y_train = np.concatenate([Y_split[j] for j in range(k) if j != fold])
+    return X_train, Y_train, X_test, Y_test
+
+if __name__ == '__main__':
+    mode = input("Choose data type 1.Regression 2.Classification :")
+    
+    file1 = 'dataset.txt'
+    file2 = 'cross.txt'
+    dataset = load_dataset(file1)
+    cross_data = load_cross_data(file2)
+    X, Y = shuffle_split(dataset)
+    Xc, Yc = shuffle_split_cross(cross_data)
+
+    # Hyperparameters
+    reg_layers = [8, 16, 1]
+    clf_layers = [2, 16, 2]
+    max_epochs = 10000
+    lr = 0.9
+    tolerance = 0.001
+    momentum = 0.95
+
+    k = 10
+    if mode == '1':
+        all_losses = []
+        for i in range(k):
+            nn = NeuralNet(reg_layers, lr, max_epochs, tolerance, momentum, mode)
+            X_train, Y_train, X_test, Y_test = k_fold_split(X, Y, k, i)
+            nn.loss_history = []
+            nn.fit(X_train, Y_train)
+            Y_norm, predictions = nn.evaluate(X_test, Y_test)
+            all_losses.append(nn.loss_history)
+        
+        plt.figure()
+        for i, losses in enumerate(all_losses):
+            plt.plot(losses, label=f'Fold {i+1}')
+        plt.title('MSE vs. Epoch for All Folds')
+        plt.xlabel('Epoch')
+        plt.ylabel('MSE')
+        plt.legend()
+        plt.grid()
+        
+        plt.figure(figsize=(12, 12))  
+
+        for i, losses in enumerate(all_losses):
+            plt.subplot(5, 2, i + 1)
+            plt.plot(losses, label=f'Fold {i+1}')
+            plt.title(f'Fold {i+1} - MSE vs. Epoch')
+            plt.xlabel('Epoch')
+            plt.ylabel('MSE')
+            plt.legend()
+            plt.grid()
+
+        plt.tight_layout()
+        plt.show()
+
+    elif mode == '2':
+        all_targets = []
+        all_preds = []
+        for i in range(k):
+            clf = NeuralNet(clf_layers, 0.85, max_epochs, tolerance, 0.9, mode)
+            Xc_train, Yc_train, Xc_test, Yc_test = k_fold_split(Xc, Yc, k, i)
+            clf.loss_history = []
+            clf.fit(Xc_train, Yc_train)
+            Y_test, predictions = clf.evaluate(Xc_test, Yc_test)
+            all_targets.append(Y_test)
+            all_preds.append(predictions)
+        
+        clf.plot_confusion_matrix(all_targets, all_preds)
+        print('___________________________________________')
+        print(f"Accuracy rate across folds: {clf.accuracy:.2f} %")
+
+    else:
+        raise ValueError("Input should be 1 or 2!")
+
+    plt.show()
