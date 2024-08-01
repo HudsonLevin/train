@@ -255,7 +255,7 @@ if __name__ == '__main__':
         plt.figure()
         for i, losses in enumerate(all_losses):
             plt.plot(losses, label=f'Fold {i+1}')
-        plt.title('MSE vs. Epoch for All Folds')
+        plt.title('MSE And Epoch ( All Folds )')
         plt.xlabel('Epoch')
         plt.ylabel('MSE')
         plt.legend()
@@ -266,7 +266,7 @@ if __name__ == '__main__':
         for i, losses in enumerate(all_losses):
             plt.subplot(5, 2, i + 1)
             plt.plot(losses, label=f'Fold {i+1}')
-            plt.title(f'Fold {i+1} - MSE vs. Epoch')
+            plt.title(f'Fold {i+1} - MSE And Epoch')
             plt.xlabel('Epoch')
             plt.ylabel('MSE')
             plt.legend()
